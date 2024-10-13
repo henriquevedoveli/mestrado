@@ -14,6 +14,7 @@ import sys
 from collections import Counter
 from torch.utils.data.sampler import WeightedRandomSampler
 
+
 def check_gpu():
     if torch.cuda.is_available():
         print(f"Usando GPU: {torch.cuda.get_device_name(0)}") 
@@ -29,12 +30,12 @@ num_classes = 78
 epochs = 125
 
 # Hiperparâmetros
-best_lr = 0.004182723693220817
-best_optimizer_name = "Adagrad"
+best_lr = 0.006822220952223784
+best_optimizer_name = "Adamax"
 best_batch_size = 128
-best_dropout_rate = 0.4747344404738524
-best_n_units_fc1 = 3584
-best_n_units_fc2 = 512
+best_dropout_rate = 0.14917551424639025
+best_n_units_fc1 = 4096
+best_n_units_fc2 = 1280
 
 # Função de normalização e aumento de dados (Data Augmentation)
 def image_normalizer():
@@ -50,24 +51,15 @@ def image_normalizer():
 
 transform = image_normalizer()
 
-print("Carregando dataset de treino")
 # Carregar o conjunto de dados de treinamento e validação
 train_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
 train_size = int(0.7 * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
 
-print("Dataset de treino carregado")
-
-print("Carregando dataset de teste")
-
 # Carregar o conjunto de dados de teste
 test_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
 test_loader = DataLoader(test_dataset, batch_size=best_batch_size, shuffle=False)
-print("Dataset de teste carregado")
-
-
-print("Pesando dataset")
 # Contar a distribuição de classes no dataset de treinamento
 class_counts = Counter([label for _, label in train_dataset])
 class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
@@ -75,15 +67,13 @@ class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
 # Calcular pesos para cada amostra no dataset de treinamento
 sample_weights = [class_weights[label] for _, label in train_dataset]
 sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
-print("Dataset com os pesos atribuidos")
-
 
 # Atualizar o DataLoader com o sampler
-train_loader = DataLoader(train_dataset, batch_size=best_batch_size, sampler=sampler)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
 val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
 
 # Recarregar o modelo VGG16 pré-treinado e congelar as camadas convolucionais
-model = models.vgg16(weights=models.VGG16_Weights.DEFAULT)
+model = models.vgg19(weights=models.VGG19_Weights.DEFAULT)
 for param in model.features.parameters():
     param.requires_grad = False  # Congelar as camadas convolucionais
 
@@ -120,7 +110,6 @@ scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
 # Função de perda para o modelo final
 final_criterion = nn.CrossEntropyLoss()
 
-# Função de treino
 def train_model(model, criterion, optimizer, scheduler, train_loader, val_loader, epochs):
     train_loss_list, val_loss_list = [], []
     train_accuracy_list, val_accuracy_list = [], []
@@ -131,10 +120,11 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, val_loader
         correct = 0
         total = 0
 
+        # Loop de progresso
         loop = tqdm(train_loader, leave=True)
         loop.set_description(f'Epoch {epoch+1}/{epochs}')
 
-        for inputs, labels in train_loader:
+        for inputs, labels in loop:
             inputs, labels = inputs.to(device), labels.to(device)
 
             # Zerar os gradientes
@@ -153,26 +143,34 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, val_loader
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+
+            # Atualizar a barra de progresso
             loop.set_postfix(loss=running_loss / (total // len(labels)), 
                                 accuracy=100 * correct / total)
 
         train_loss = running_loss / len(train_loader)
         train_accuracy = 100 * correct / total
 
+        # Validação após cada época
         val_loss, val_accuracy = validate_model(model, val_loader, criterion)
 
+        # Guardar os valores para análise
         train_loss_list.append(train_loss)
         val_loss_list.append(val_loss)
         train_accuracy_list.append(train_accuracy)
         val_accuracy_list.append(val_accuracy)
 
-        print(f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%")
+        # Printar a perda e acurácia de treino e validação
+        print(f"Epoch [{epoch+1}/{epochs}] - "
+                f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%")
         print(f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%")
 
-        # Atualizar o scheduler para ajustar a taxa de aprendizado
+        # Atualizar o scheduler
         scheduler.step()
 
     return train_loss_list, val_loss_list, train_accuracy_list, val_accuracy_list
+
+
 
 # Função para validar o modelo
 def validate_model(model, val_loader, criterion):
@@ -251,13 +249,13 @@ plt.legend()
 os.makedirs('./plots', exist_ok=True)
 
 # Salvar os gráficos em um arquivo
-plt.savefig('./plots/vgg_train.png')
+plt.savefig('./plots/vgg19_train.png')
 plt.show()
 
 os.makedirs('./models', exist_ok=True)
 
 # Salvar o modelo treinado
-model_save_path = './models/vgg16_model.pth'
+model_save_path = './models/vgg19_model.pth'
 torch.save(model.state_dict(), model_save_path)
 
 print(f'Modelo salvo em {model_save_path}')

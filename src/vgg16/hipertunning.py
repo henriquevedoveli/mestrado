@@ -12,7 +12,10 @@ from torchvision.datasets import ImageFolder
 from tqdm import tqdm
 import optuna
 import sys
+from collections import Counter
+from torch.utils.data.sampler import WeightedRandomSampler
 
+# Verifica se GPU está disponível
 def check_gpu():
     if torch.cuda.is_available():
         print(f"Usando GPU: {torch.cuda.get_device_name(0)}") 
@@ -24,10 +27,11 @@ def check_gpu():
 device = check_gpu()
 
 data_dir = 'imgs/'
-batch_size = 64
+batch_size = 256
 num_classes = 78
 epochs = 200
 
+# Função para normalizar as imagens
 def image_normalizer():
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -39,14 +43,21 @@ def image_normalizer():
 transform = image_normalizer()
 
 # Carregar o conjunto de dados de treinamento e validação
-
 train_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
 train_size = int(0.7 * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
 
-# Carregar os dados usando DataLoader
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+# Contar a distribuição de classes no dataset de treinamento
+class_counts = Counter([label for _, label in train_dataset])
+class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
+
+# Calcular pesos para cada amostra no dataset de treinamento
+sample_weights = [class_weights[label] for _, label in train_dataset]
+sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+
+# Atualizar o DataLoader com o sampler
+train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 # Carregar o conjunto de dados de teste
@@ -145,19 +156,16 @@ def test_model(model, test_loader):
     accuracy = 100 * correct / total
     print(f'Test Accuracy: {accuracy:.2f}%')
 
-# Definir a função de objetivo para otimização
-import os
-
+# Função para otimizar o modelo usando Optuna
 def objective(trial):
     # Hiperparâmetros a serem otimizados
     lr = trial.suggest_float('lr', 1e-6, 1e-1, log=True)
     optimizer_name = trial.suggest_categorical('optimizer', ['Adam', 'SGD', 'RMSprop', 'Adagrad', 'Adamax'])
-    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64, 128, 256])
     dropout_rate = trial.suggest_float('dropout_rate', 0.0, 0.5) 
     n_units_fc1 = trial.suggest_int('n_units_fc1', 1024, 4096, step=512)
     n_units_fc2 = trial.suggest_int('n_units_fc2', 512, 2048, step=256)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     num_classes = len(os.listdir("./imgs"))
@@ -226,7 +234,6 @@ best_results_path = "best_experiment_result.txt"
 with open(best_results_path, 'w') as f:
     f.write(f"Best Trial: {best_trial.number}, Val Accuracy: {best_trial.value}, "
             f"Params: {best_trial.params}\n")
-
 
 print("="*20)
 print("Melhores valores:")

@@ -11,8 +11,6 @@ from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from tqdm import tqdm
 import sys
-from collections import Counter
-from torch.utils.data.sampler import WeightedRandomSampler
 
 def check_gpu():
     if torch.cuda.is_available():
@@ -26,15 +24,15 @@ device = check_gpu()
 
 data_dir = 'imgs/'
 num_classes = 78
-epochs = 125
+epochs = 200
 
 # Hiperparâmetros
-best_lr = 0.004182723693220817
-best_optimizer_name = "Adagrad"
+best_lr = 0.0016057264136630175
+best_optimizer_name = "Adam"
 best_batch_size = 128
-best_dropout_rate = 0.4747344404738524
-best_n_units_fc1 = 3584
-best_n_units_fc2 = 512
+best_dropout_rate = 0.31395823864883543
+best_n_units_fc1 = 2048
+best_n_units_fc2 = 1536
 
 # Função de normalização e aumento de dados (Data Augmentation)
 def image_normalizer():
@@ -50,24 +48,16 @@ def image_normalizer():
 
 transform = image_normalizer()
 
-print("Carregando dataset de treino")
 # Carregar o conjunto de dados de treinamento e validação
 train_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
 train_size = int(0.7 * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
 
-print("Dataset de treino carregado")
-
-print("Carregando dataset de teste")
-
 # Carregar o conjunto de dados de teste
 test_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
 test_loader = DataLoader(test_dataset, batch_size=best_batch_size, shuffle=False)
-print("Dataset de teste carregado")
 
-
-print("Pesando dataset")
 # Contar a distribuição de classes no dataset de treinamento
 class_counts = Counter([label for _, label in train_dataset])
 class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
@@ -75,32 +65,38 @@ class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
 # Calcular pesos para cada amostra no dataset de treinamento
 sample_weights = [class_weights[label] for _, label in train_dataset]
 sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
-print("Dataset com os pesos atribuidos")
-
 
 # Atualizar o DataLoader com o sampler
-train_loader = DataLoader(train_dataset, batch_size=best_batch_size, sampler=sampler)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
 val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
 
-# Recarregar o modelo VGG16 pré-treinado e congelar as camadas convolucionais
-model = models.vgg16(weights=models.VGG16_Weights.DEFAULT)
-for param in model.features.parameters():
-    param.requires_grad = False  # Congelar as camadas convolucionais
 
 num_classes = len(os.listdir("./imgs"))
 print(f"{num_classes} classes encontradas")
 
-# Modificar o classificador para usar os melhores hiperparâmetros encontrados
-model.classifier = nn.Sequential(
-    nn.Linear(25088, best_n_units_fc1),  # Usar os melhores hiperparâmetros
-    nn.ReLU(inplace=True),
-    nn.Dropout(best_dropout_rate),  # Melhor taxa de dropout
-    nn.Linear(best_n_units_fc1, best_n_units_fc2),
+# Carregar o modelo ResNet50 pré-treinado
+model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+
+# Congelar as camadas convolucionais
+for param in model.parameters():
+    param.requires_grad = False
+
+# Modificar a última camada (fully connected layer) para o número de classes (num_classes)
+# A última camada da ResNet50 padrão é nn.Linear(2048, 1000)
+model.fc = nn.Sequential(
+    nn.Linear(2048, best_n_units_fc1),
     nn.ReLU(inplace=True),
     nn.Dropout(best_dropout_rate),
-    nn.Linear(best_n_units_fc2, num_classes)  # Saída com o número de classes
+    nn.Linear(n_units_fc1, best_n_units_fc2),
+    nn.ReLU(inplace=True),
+    nn.Dropout(best_dropout_rate),
+    nn.Linear(best_n_units_fc2, num_classes)
 )
+
 model.to(device)
+
+# Restante do código permanece o mesmo para otimização, treinamento, validação e teste
+
 
 # Definir o otimizador com os melhores parâmetros encontrados
 if best_optimizer_name == 'Adam':
@@ -153,8 +149,7 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, val_loader
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-            loop.set_postfix(loss=running_loss / (total // len(labels)), 
-                                accuracy=100 * correct / total)
+            loop.set_postfix(loss=loss.item(), accuracy=100 * correct / total)
 
         train_loss = running_loss / len(train_loader)
         train_accuracy = 100 * correct / total
