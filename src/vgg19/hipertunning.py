@@ -12,6 +12,9 @@ from torchvision.datasets import ImageFolder
 from tqdm import tqdm
 import optuna
 import sys
+from collections import Counter
+from torch.utils.data.sampler import WeightedRandomSampler
+
 
 def check_gpu():
     if torch.cuda.is_available():
@@ -22,6 +25,10 @@ def check_gpu():
         sys.exit()  
 
 device = check_gpu()
+
+torch.manual_seed(42)
+np.random.seed(42)
+
 
 data_dir = 'imgs/'
 batch_size = 128
@@ -157,9 +164,8 @@ import os
 
 def objective(trial):
     # Hiperparâmetros a serem otimizados
-    lr = trial.suggest_float('lr', 1e-6, 1e-1, log=True)
+    lr = trial.suggest_float('lr', 1e-4, 1e-1, log=True)
     optimizer_name = trial.suggest_categorical('optimizer', ['Adam', 'SGD', 'RMSprop', 'Adagrad', 'Adamax'])
-    batch_size = trial.suggest_categorical('batch_size', [16, 32, 64, 128, 256])
     dropout_rate = trial.suggest_float('dropout_rate', 0.0, 0.5) 
     n_units_fc1 = trial.suggest_int('n_units_fc1', 1024, 4096, step=512)
     n_units_fc2 = trial.suggest_int('n_units_fc2', 512, 2048, step=256)
@@ -171,7 +177,6 @@ def objective(trial):
 
     # Carregar o modelo VGG16 pré-treinado
     model = models.vgg19(weights=models.VGG19_Weights.DEFAULT)
-    print(model)
 
     # Congelar as camadas convolucionais
     for param in model.features.parameters():
@@ -212,12 +217,10 @@ def objective(trial):
 
     # Salvar resultados em um arquivo txt
     val_accuracy = val_accuracy_list[-1]
-    results_path = "experiment_results.txt"
+    results_path = "experiment_results_vgg19.txt"
     
     with open(results_path, 'a') as f:
-        f.write(f"Trial: {trial.number}, LR: {lr}, Optimizer: {optimizer_name}, Batch size: {batch_size}, "
-                f"Dropout rate: {dropout_rate}, FC1 units: {n_units_fc1}, FC2 units: {n_units_fc2}, "
-              f"Val Accuracy: {val_accuracy}\n")
+        f.write(f"Trial: {trial.number}, LR: {lr}, Optimizer: {optimizer_name} Dropout rate: {dropout_rate}, FC1 units: {n_units_fc1}, FC2 units: {n_units_fc2} Val Accuracy: {val_accuracy}\n")
 
     # Retornar a acurácia de validação da última época para otimização
     return val_accuracy
@@ -229,7 +232,7 @@ study.optimize(objective, n_trials=50)
 
 # Após a otimização, salvar o melhor resultado
 best_trial = study.best_trial
-best_results_path = "best_experiment_result.txt"
+best_results_path = "best_experiment_result_vhh19.txt"
 
 with open(best_results_path, 'w') as f:
     f.write(f"Best Trial: {best_trial.number}, Val Accuracy: {best_trial.value}, "

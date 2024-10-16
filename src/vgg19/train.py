@@ -30,19 +30,16 @@ num_classes = 78
 epochs = 125
 
 # Hiperparâmetros
-best_lr = 0.006822220952223784
-best_optimizer_name = "Adamax"
+best_lr = 0.0009334627414905053
+best_optimizer_name = "RMSprop"
 best_batch_size = 128
-best_dropout_rate = 0.14917551424639025
+best_dropout_rate = 0.49794798102812354
 best_n_units_fc1 = 4096
-best_n_units_fc2 = 1280
+best_n_units_fc2 = 1024
 
 # Função de normalização e aumento de dados (Data Augmentation)
 def image_normalizer():
     transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(10),
-        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
@@ -69,13 +66,13 @@ sample_weights = [class_weights[label] for _, label in train_dataset]
 sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
 
 # Atualizar o DataLoader com o sampler
-train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
+train_loader = DataLoader(train_dataset, batch_size=best_batch_size, sampler=sampler)
 val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
 
 # Recarregar o modelo VGG16 pré-treinado e congelar as camadas convolucionais
 model = models.vgg19(weights=models.VGG19_Weights.DEFAULT)
 for param in model.features.parameters():
-    param.requires_grad = False  # Congelar as camadas convolucionais
+    param.requires_grad = False 
 
 num_classes = len(os.listdir("./imgs"))
 print(f"{num_classes} classes encontradas")
@@ -103,14 +100,10 @@ elif best_optimizer_name == 'Adagrad':
     optimizer = optim.Adagrad(model.parameters(), lr=best_lr)
 elif best_optimizer_name == 'Adamax':
     optimizer = optim.Adamax(model.parameters(), lr=best_lr)
-
-# Adicionar um scheduler para reduzir a taxa de aprendizado durante o treinamento
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
-
 # Função de perda para o modelo final
 final_criterion = nn.CrossEntropyLoss()
 
-def train_model(model, criterion, optimizer, scheduler, train_loader, val_loader, epochs):
+def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
     train_loss_list, val_loss_list = [], []
     train_accuracy_list, val_accuracy_list = [], []
 
@@ -165,8 +158,7 @@ def train_model(model, criterion, optimizer, scheduler, train_loader, val_loader
                 f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%")
         print(f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%")
 
-        # Atualizar o scheduler
-        scheduler.step()
+
 
     return train_loss_list, val_loss_list, train_accuracy_list, val_accuracy_list
 
@@ -218,7 +210,7 @@ def test_model(model, test_loader):
 print("\n\n INICIANDO TREINAMENTO DO MODELO FINAL \n\n")
 
 train_loss_list, val_loss_list, train_accuracy_list, val_accuracy_list = train_model(
-    model, final_criterion, optimizer, scheduler, train_loader, val_loader, epochs=epochs
+    model, final_criterion, optimizer, train_loader, val_loader, epochs=epochs
 )
 
 # Avaliar o modelo no conjunto de teste
