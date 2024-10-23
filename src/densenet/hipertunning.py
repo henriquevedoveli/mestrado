@@ -34,7 +34,6 @@ epochs = 200
 torch.manual_seed(42)
 np.random.seed(42)
 
-
 # Função para normalizar as imagens
 def image_normalizer():
     transform = transforms.Compose([
@@ -101,7 +100,8 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-            loop.set_postfix(loss=loss.item(), accuracy=100 * correct / total)
+            loop.set_postfix(loss=running_loss / (total // len(labels)), 
+                             accuracy=100 * correct / total)
 
         train_loss = running_loss / len(train_loader)
         train_accuracy = 100 * correct / total
@@ -172,19 +172,16 @@ def objective(trial):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    num_classes = len(os.listdir("./imgs"))
-
-        # Carregar o modelo ResNet50 pré-treinado
-    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+    # Usar DenseNet em vez de ResNet
+    model = models.densenet121(weights=models.DenseNet121_Weights.DEFAULT)
 
     # Congelar as camadas convolucionais
     for param in model.parameters():
         param.requires_grad = False
 
     # Modificar a última camada (fully connected layer) para o número de classes (num_classes)
-    # A última camada da ResNet50 padrão é nn.Linear(2048, 1000)
-    model.fc = nn.Sequential(
-        nn.Linear(2048, n_units_fc1),
+    model.classifier = nn.Sequential(
+        nn.Linear(model.classifier.in_features, n_units_fc1), 
         nn.ReLU(inplace=True),
         nn.Dropout(dropout_rate),
         nn.Linear(n_units_fc1, n_units_fc2),
@@ -195,10 +192,7 @@ def objective(trial):
 
     model.to(device)
 
-# Restante do código permanece o mesmo para otimização, treinamento, validação e teste
-
-
-    # Definir o otimizador
+    # Configuração do otimizador com os hiperparâmetros sugeridos
     if optimizer_name == 'Adam':
         optimizer = optim.Adam(model.parameters(), lr=lr)
     elif optimizer_name == 'SGD':
@@ -220,7 +214,7 @@ def objective(trial):
 
     # Salvar resultados em um arquivo txt
     val_accuracy = val_accuracy_list[-1]
-    results_path = "experiment_results.txt"
+    results_path = "experiment_results_densenet_121.txt"
     
     with open(results_path, 'a') as f:
         f.write(f"Trial: {trial.number}, LR: {lr}, Optimizer: {optimizer_name}, Batch size: {batch_size}, "
@@ -237,17 +231,63 @@ study.optimize(objective, n_trials=50)
 
 # Após a otimização, salvar o melhor resultado
 best_trial = study.best_trial
-best_results_path = "best_experiment_result.txt"
+best_results_path = "best_experiment_result_densenet_121.txt"
 
 with open(best_results_path, 'w') as f:
     f.write(f"Best Trial: {best_trial.number}, Val Accuracy: {best_trial.value}, "
-            f"Params: {best_trial.params}\n")
+            f"Parameters: {best_trial.params}\n")
 
-print("="*20)
-print("Melhores valores:")
-trial = study.best_trial
+print(f"\nMelhores hiperparâmetros: {best_trial.params}")
+print(f"Acurácia de validação: {best_trial.value}")
 
-print(f"  Value: {trial.value}")
-print(f"  Params: ")
-for key, value in trial.params.items():
-    print(f"    {key}: {value}")
+# Teste final do modelo otimizado com os melhores parâmetros
+best_model = models.densenet121(weights=models.DenseNet121_Weights.DEFAULT)
+best_model.classifier = nn.Sequential(
+    nn.Linear(best_model.classifier.in_features, best_trial.params['n_units_fc1']),
+    nn.ReLU(inplace=True),
+    nn.Dropout(best_trial.params['dropout_rate']),
+    nn.Linear(best_trial.params['n_units_fc1'], best_trial.params['n_units_fc2']),
+    nn.ReLU(inplace=True),
+    nn.Dropout(best_trial.params['dropout_rate']),
+    nn.Linear(best_trial.params['n_units_fc2'], num_classes)
+)
+
+best_model.to(device)
+
+if best_trial.params['optimizer'] == 'Adam':
+    best_optimizer = optim.Adam(best_model.parameters(), lr=best_trial.params['lr'])
+elif best_trial.params['optimizer'] == 'SGD':
+    best_optimizer = optim.SGD(best_model.parameters(), lr=best_trial.params['lr'], momentum=0.9)
+elif best_trial.params['optimizer'] == 'RMSprop':
+    best_optimizer = optim.RMSprop(best_model.parameters(), lr=best_trial.params['lr'])
+elif best_trial.params['optimizer'] == 'Adagrad':
+    best_optimizer = optim.Adagrad(best_model.parameters(), lr=best_trial.params['lr'])
+elif best_trial.params['optimizer'] == 'Adamax':
+    best_optimizer = optim.Adamax(best_model.parameters(), lr=best_trial.params['lr'])
+
+# Treinamento final do modelo otimizado
+epochs = 10
+train_model(best_model, criterion, best_optimizer, train_loader, val_loader, epochs)
+
+# Avaliar o modelo no conjunto de teste
+test_model(best_model, test_loader)
+
+# Visualizar as perdas e acurácias de treino e validação
+plt.figure(figsize=(12, 5))
+plt.subplot(1, 2, 1)
+plt.plot(train_loss_list, label='Train Loss')
+plt.plot(val_loss_list, label='Validation Loss')
+plt.title('Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+
+plt.subplot(1, 2, 2)
+plt.plot(train_accuracy_list, label='Train Accuracy')
+plt.plot(val_accuracy_list, label='Validation Accuracy')
+plt.title('Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+
+plt.show()

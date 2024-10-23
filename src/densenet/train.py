@@ -32,12 +32,12 @@ num_classes = 78
 epochs = 125
 
 # Hiperparâmetros
-best_lr = 0.00039190375648018403
-best_optimizer_name = "Adamax"
+best_lr = 0.00044220953014257724
+best_optimizer_name = "Adam"
 best_batch_size = 128
-best_dropout_rate = 0.12435889320846848
-best_n_units_fc1 = 2560
-best_n_units_fc2 = 1536
+best_dropout_rate = 0.07609417454082278
+best_n_units_fc1 = 4096
+best_n_units_fc2 = 1792
 
 # Função de normalização e aumento de dados (Data Augmentation)
 def image_normalizer():
@@ -77,16 +77,13 @@ num_classes = len(os.listdir("./imgs"))
 print(f"{num_classes} classes encontradas")
 
 # Carregar o modelo ResNet50 pré-treinado
-model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+model = models.densenet121(weights=models.DenseNet121_Weights.DEFAULT)
 
-# Congelar as camadas convolucionais
 for param in model.parameters():
     param.requires_grad = False
 
-# Modificar a última camada (fully connected layer) para o número de classes (num_classes)
-# A última camada da ResNet50 padrão é nn.Linear(2048, 1000)
-model.fc = nn.Sequential(
-    nn.Linear(2048, best_n_units_fc1),
+model.classifier = nn.Sequential(
+    nn.Linear(model.classifier.in_features, best_n_units_fc1),
     nn.ReLU(inplace=True),
     nn.Dropout(best_dropout_rate),
     nn.Linear(best_n_units_fc1, best_n_units_fc2),
@@ -244,13 +241,13 @@ plt.legend()
 os.makedirs('./plots', exist_ok=True)
 
 # Salvar os gráficos em um arquivo
-plt.savefig('./plots/vgg_train.png')
+plt.savefig('./plots/densenet.png')
 plt.show()
 
 os.makedirs('./models', exist_ok=True)
 
 # Salvar o modelo treinado
-model_save_path = './models/vgg16_model.pth'
+model_save_path = './models/densenet.pth'
 torch.save(model.state_dict(), model_save_path)
 
 print(f'Modelo salvo em {model_save_path}')

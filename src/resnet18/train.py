@@ -14,6 +14,7 @@ import sys
 from collections import Counter
 from torch.utils.data.sampler import WeightedRandomSampler
 
+
 def check_gpu():
     if torch.cuda.is_available():
         print(f"Usando GPU: {torch.cuda.get_device_name(0)}") 
@@ -27,22 +28,23 @@ device = check_gpu()
 torch.manual_seed(42)
 np.random.seed(42)
 
+
 data_dir = 'imgs/'
 num_classes = 78
 epochs = 125
 
 # Hiperparâmetros
-best_lr = 0.00039190375648018403
-best_optimizer_name = "Adamax"
+best_lr =0.0008957331050363928
+best_optimizer_name = "Adam"
 best_batch_size = 128
-best_dropout_rate = 0.12435889320846848
-best_n_units_fc1 = 2560
+best_dropout_rate = 0.17262887248334463
+best_n_units_fc1 = 3072
 best_n_units_fc2 = 1536
 
 # Função de normalização e aumento de dados (Data Augmentation)
 def image_normalizer():
     transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+        transforms.Resize((299, 299)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
@@ -59,7 +61,6 @@ train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train
 # Carregar o conjunto de dados de teste
 test_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
 test_loader = DataLoader(test_dataset, batch_size=best_batch_size, shuffle=False)
-
 # Contar a distribuição de classes no dataset de treinamento
 class_counts = Counter([label for _, label in train_dataset])
 class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
@@ -72,33 +73,25 @@ sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights),
 train_loader = DataLoader(train_dataset, batch_size=best_batch_size, sampler=sampler)
 val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
 
+model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+
+for param in model.parameters():
+    param.requires_grad = False
 
 num_classes = len(os.listdir("./imgs"))
 print(f"{num_classes} classes encontradas")
 
-# Carregar o modelo ResNet50 pré-treinado
-model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-
-# Congelar as camadas convolucionais
-for param in model.parameters():
-    param.requires_grad = False
-
-# Modificar a última camada (fully connected layer) para o número de classes (num_classes)
-# A última camada da ResNet50 padrão é nn.Linear(2048, 1000)
 model.fc = nn.Sequential(
-    nn.Linear(2048, best_n_units_fc1),
+    nn.Linear(512, best_n_units_fc1),  # Usar os melhores hiperparâmetros
     nn.ReLU(inplace=True),
-    nn.Dropout(best_dropout_rate),
+    nn.Dropout(best_dropout_rate),  # Melhor taxa de dropout
     nn.Linear(best_n_units_fc1, best_n_units_fc2),
     nn.ReLU(inplace=True),
     nn.Dropout(best_dropout_rate),
-    nn.Linear(best_n_units_fc2, num_classes)
+    nn.Linear(best_n_units_fc2, num_classes)  # Saída com o número de classes
 )
-
 model.to(device)
-
-# Restante do código permanece o mesmo para otimização, treinamento, validação e teste
-
 
 # Definir o otimizador com os melhores parâmetros encontrados
 if best_optimizer_name == 'Adam':
@@ -111,13 +104,9 @@ elif best_optimizer_name == 'Adagrad':
     optimizer = optim.Adagrad(model.parameters(), lr=best_lr)
 elif best_optimizer_name == 'Adamax':
     optimizer = optim.Adamax(model.parameters(), lr=best_lr)
-
-# Adicionar um scheduler para reduzir a taxa de aprendizado durante o treinamento
-
 # Função de perda para o modelo final
 final_criterion = nn.CrossEntropyLoss()
 
-# Função de treino
 def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
     train_loss_list, val_loss_list = [], []
     train_accuracy_list, val_accuracy_list = [], []
@@ -128,10 +117,11 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
         correct = 0
         total = 0
 
+        # Loop de progresso
         loop = tqdm(train_loader, leave=True)
         loop.set_description(f'Epoch {epoch+1}/{epochs}')
 
-        for inputs, labels in train_loader:
+        for inputs, labels in loop:
             inputs, labels = inputs.to(device), labels.to(device)
 
             # Zerar os gradientes
@@ -150,22 +140,33 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-            loop.set_postfix(loss=loss.item(), accuracy=100 * correct / total)
+
+            # Atualizar a barra de progresso
+            loop.set_postfix(loss=running_loss / (total // len(labels)), 
+                                accuracy=100 * correct / total)
 
         train_loss = running_loss / len(train_loader)
         train_accuracy = 100 * correct / total
 
+        # Validação após cada época
         val_loss, val_accuracy = validate_model(model, val_loader, criterion)
 
+        # Guardar os valores para análise
         train_loss_list.append(train_loss)
         val_loss_list.append(val_loss)
         train_accuracy_list.append(train_accuracy)
         val_accuracy_list.append(val_accuracy)
 
-        print(f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%")
+        # Printar a perda e acurácia de treino e validação
+        print(f"Epoch [{epoch+1}/{epochs}] - "
+                f"Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.2f}%")
         print(f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.2f}%")
 
+
+
     return train_loss_list, val_loss_list, train_accuracy_list, val_accuracy_list
+
+
 
 # Função para validar o modelo
 def validate_model(model, val_loader, criterion):
@@ -244,13 +245,13 @@ plt.legend()
 os.makedirs('./plots', exist_ok=True)
 
 # Salvar os gráficos em um arquivo
-plt.savefig('./plots/vgg_train.png')
+plt.savefig('./plots/resnet_18_train.png')
 plt.show()
 
 os.makedirs('./models', exist_ok=True)
 
 # Salvar o modelo treinado
-model_save_path = './models/vgg16_model.pth'
+model_save_path = './models/resnet_18.pth'
 torch.save(model.state_dict(), model_save_path)
 
 print(f'Modelo salvo em {model_save_path}')

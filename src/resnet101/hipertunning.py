@@ -10,10 +10,12 @@ from torchvision import models
 from torch.utils.data import DataLoader
 from torchvision.datasets import ImageFolder
 from tqdm import tqdm
+import optuna
 import sys
 from collections import Counter
 from torch.utils.data.sampler import WeightedRandomSampler
 
+# Verifica se GPU está disponível
 def check_gpu():
     if torch.cuda.is_available():
         print(f"Usando GPU: {torch.cuda.get_device_name(0)}") 
@@ -24,22 +26,15 @@ def check_gpu():
 
 device = check_gpu()
 
+data_dir = 'imgs/'
+batch_size = 128
+num_classes = 78
+epochs = 200
+
 torch.manual_seed(42)
 np.random.seed(42)
 
-data_dir = 'imgs/'
-num_classes = 78
-epochs = 125
-
-# Hiperparâmetros
-best_lr = 0.00039190375648018403
-best_optimizer_name = "Adamax"
-best_batch_size = 128
-best_dropout_rate = 0.12435889320846848
-best_n_units_fc1 = 2560
-best_n_units_fc2 = 1536
-
-# Função de normalização e aumento de dados (Data Augmentation)
+# Função para normalizar as imagens
 def image_normalizer():
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -56,10 +51,6 @@ train_size = int(0.7 * len(train_dataset))
 val_size = len(train_dataset) - train_size
 train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
 
-# Carregar o conjunto de dados de teste
-test_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
-test_loader = DataLoader(test_dataset, batch_size=best_batch_size, shuffle=False)
-
 # Contar a distribuição de classes no dataset de treinamento
 class_counts = Counter([label for _, label in train_dataset])
 class_weights = [1.0 / class_counts[i] for i in range(num_classes)]
@@ -69,55 +60,14 @@ sample_weights = [class_weights[label] for _, label in train_dataset]
 sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
 
 # Atualizar o DataLoader com o sampler
-train_loader = DataLoader(train_dataset, batch_size=best_batch_size, sampler=sampler)
-val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
+# Carregar o conjunto de dados de teste
+test_dataset = ImageFolder(os.path.join(data_dir), transform=transform)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-num_classes = len(os.listdir("./imgs"))
-print(f"{num_classes} classes encontradas")
-
-# Carregar o modelo ResNet50 pré-treinado
-model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-
-# Congelar as camadas convolucionais
-for param in model.parameters():
-    param.requires_grad = False
-
-# Modificar a última camada (fully connected layer) para o número de classes (num_classes)
-# A última camada da ResNet50 padrão é nn.Linear(2048, 1000)
-model.fc = nn.Sequential(
-    nn.Linear(2048, best_n_units_fc1),
-    nn.ReLU(inplace=True),
-    nn.Dropout(best_dropout_rate),
-    nn.Linear(best_n_units_fc1, best_n_units_fc2),
-    nn.ReLU(inplace=True),
-    nn.Dropout(best_dropout_rate),
-    nn.Linear(best_n_units_fc2, num_classes)
-)
-
-model.to(device)
-
-# Restante do código permanece o mesmo para otimização, treinamento, validação e teste
-
-
-# Definir o otimizador com os melhores parâmetros encontrados
-if best_optimizer_name == 'Adam':
-    optimizer = optim.Adam(model.parameters(), lr=best_lr)
-elif best_optimizer_name == 'SGD':
-    optimizer = optim.SGD(model.parameters(), lr=best_lr, momentum=0.9)
-elif best_optimizer_name == 'RMSprop':
-    optimizer = optim.RMSprop(model.parameters(), lr=best_lr)
-elif best_optimizer_name == 'Adagrad':
-    optimizer = optim.Adagrad(model.parameters(), lr=best_lr)
-elif best_optimizer_name == 'Adamax':
-    optimizer = optim.Adamax(model.parameters(), lr=best_lr)
-
-# Adicionar um scheduler para reduzir a taxa de aprendizado durante o treinamento
-
-# Função de perda para o modelo final
-final_criterion = nn.CrossEntropyLoss()
-
-# Função de treino
+# Função para treinar o modelo
 def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
     train_loss_list, val_loss_list = [], []
     train_accuracy_list, val_accuracy_list = [], []
@@ -150,7 +100,8 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, epochs):
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-            loop.set_postfix(loss=loss.item(), accuracy=100 * correct / total)
+            loop.set_postfix(loss=running_loss / (total // len(labels)), 
+                                accuracy=100 * correct / total)
 
         train_loss = running_loss / len(train_loader)
         train_accuracy = 100 * correct / total
@@ -209,48 +160,89 @@ def test_model(model, test_loader):
     accuracy = 100 * correct / total
     print(f'Test Accuracy: {accuracy:.2f}%')
 
-# Iniciar o treinamento do modelo com as mudanças aplicadas
-print("\n\n INICIANDO TREINAMENTO DO MODELO FINAL \n\n")
+# Função para otimizar o modelo usando Optuna
+def objective(trial):
+    # Hiperparâmetros a serem otimizados
+    lr = trial.suggest_float('lr', 1e-6, 1e-1, log=True)
+    optimizer_name = trial.suggest_categorical('optimizer', ['Adam', 'SGD', 'RMSprop', 'Adagrad', 'Adamax'])
+    dropout_rate = trial.suggest_float('dropout_rate', 0.0, 0.5) 
+    n_units_fc1 = trial.suggest_int('n_units_fc1', 1024, 4096, step=512)
+    n_units_fc2 = trial.suggest_int('n_units_fc2', 512, 2048, step=256)
 
-train_loss_list, val_loss_list, train_accuracy_list, val_accuracy_list = train_model(
-    model, final_criterion, optimizer, train_loader, val_loader, epochs=epochs
-)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-# Avaliar o modelo no conjunto de teste
-test_model(model, test_loader)
+    num_classes = len(os.listdir("./imgs"))
 
-# Plote e salve os gráficos de acurácia e perda
-plt.figure(figsize=(12, 6))
+    model = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
 
-# Gráfico de Acurácia
-plt.subplot(1, 2, 1)
-plt.plot(train_accuracy_list, label='Train Accuracy')
-plt.plot(val_accuracy_list, label='Validation Accuracy')
-plt.xlabel('Epochs')
-plt.ylabel('Accuracy')
-plt.title('Training and Validation Accuracy')
-plt.legend()
+    # Congelar as camadas convolucionais
+    for param in model.parameters():
+        param.requires_grad = False
 
-# Gráfico de Perda
-plt.subplot(1, 2, 2)
-plt.plot(train_loss_list, label='Train Loss')
-plt.plot(val_loss_list, label='Validation Loss')
-plt.xlabel('Epochs')
-plt.ylabel('Loss')
-plt.title('Training and Validation Loss')
-plt.legend()
+    # Modificar a última camada (fully connected layer) para o número de classes (num_classes)
+    model.fc = nn.Sequential(
+        nn.Linear(model.fc.in_features, n_units_fc1), 
+        nn.ReLU(inplace=True),
+        nn.Dropout(dropout_rate),
+        nn.Linear(n_units_fc1, n_units_fc2),
+        nn.ReLU(inplace=True),
+        nn.Dropout(dropout_rate),
+        nn.Linear(n_units_fc2, num_classes)
+    )
 
+    model.to(device)
 
-os.makedirs('./plots', exist_ok=True)
+    # Configuração do otimizador com os hiperparâmetros sugeridos
+    if optimizer_name == 'Adam':
+        optimizer = optim.Adam(model.parameters(), lr=lr)
+    elif optimizer_name == 'SGD':
+        optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9)
+    elif optimizer_name == 'RMSprop':
+        optimizer = optim.RMSprop(model.parameters(), lr=lr)
+    elif optimizer_name == 'Adagrad':
+        optimizer = optim.Adagrad(model.parameters(), lr=lr)
+    elif optimizer_name == 'Adamax':
+        optimizer = optim.Adamax(model.parameters(), lr=lr)
 
-# Salvar os gráficos em um arquivo
-plt.savefig('./plots/vgg_train.png')
-plt.show()
+    # Função de perda
+    criterion = nn.CrossEntropyLoss()
 
-os.makedirs('./models', exist_ok=True)
+    epochs = 10
+    train_loss_list, val_loss_list, train_accuracy_list, val_accuracy_list = train_model(
+        model, criterion, optimizer, train_loader, val_loader, epochs
+    )
 
-# Salvar o modelo treinado
-model_save_path = './models/vgg16_model.pth'
-torch.save(model.state_dict(), model_save_path)
+    # Salvar resultados em um arquivo txt
+    val_accuracy = val_accuracy_list[-1]
+    results_path = "experiment_results_resnet_100.txt"
+    
+    with open(results_path, 'a') as f:
+        f.write(f"Trial: {trial.number}, LR: {lr}, Optimizer: {optimizer_name}, Batch size: {batch_size}, "
+                f"Dropout rate: {dropout_rate}, FC1 units: {n_units_fc1}, FC2 units: {n_units_fc2}, "
+              f"Val Accuracy: {val_accuracy}\n")
 
-print(f'Modelo salvo em {model_save_path}')
+    # Retornar a acurácia de validação da última época para otimização
+    return val_accuracy
+
+print("\n\n INICIANDO OTIMIZACAO \n\n")
+
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=50)
+
+# Após a otimização, salvar o melhor resultado
+best_trial = study.best_trial
+best_results_path = "best_experiment_result_resnet_100.txt"
+
+with open(best_results_path, 'w') as f:
+    f.write(f"Best Trial: {best_trial.number}, Val Accuracy: {best_trial.value}, "
+            f"Params: {best_trial.params}\n")
+
+print("="*20)
+print("Melhores valores:")
+trial = study.best_trial
+
+print(f"  Value: {trial.value}")
+print(f"  Params: ")
+for key, value in trial.params.items():
+    print(f"    {key}: {value}")

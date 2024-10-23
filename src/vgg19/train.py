@@ -25,16 +25,20 @@ def check_gpu():
 
 device = check_gpu()
 
+torch.manual_seed(42)
+np.random.seed(42)
+
+
 data_dir = 'imgs/'
 num_classes = 78
 epochs = 125
 
 # Hiperparâmetros
-best_lr = 0.0009334627414905053
+best_lr =0.0009722020939736233
 best_optimizer_name = "RMSprop"
 best_batch_size = 128
-best_dropout_rate = 0.49794798102812354
-best_n_units_fc1 = 4096
+best_dropout_rate = 0.35252937693967057
+best_n_units_fc1 = 1536
 best_n_units_fc2 = 1024
 
 # Função de normalização e aumento de dados (Data Augmentation)
